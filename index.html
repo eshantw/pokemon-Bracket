@@ -1,0 +1,708 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>寶可夢學園對戰系統</title>
+  
+  <script src="https://cdn.tailwindcss.com"></script>
+  
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <style>
+    /* 自訂捲軸樣式 */
+    .scrollbar-thin::-webkit-scrollbar { height: 6px; }
+    .scrollbar-thumb-slate-300::-webkit-scrollbar-thumb { background-color: #cbd5e1; border-radius: 3px; }
+  </style>
+</head>
+<body class="bg-slate-50">
+  
+  <div id="root"></div>
+
+  <script type="text/babel" data-type="module">
+    // 1. 從 CDN 載入 React 核心與圖示套件
+    import React, { useState, useEffect } from 'https://esm.sh/react@18.2.0';
+    import { createRoot } from 'https://esm.sh/react-dom@18.2.0/client';
+    import { Trophy, UserPlus, Trash2, Award, Zap, Users, X, ExternalLink, Swords, LayoutGrid, CheckCircle2, Circle, Download, LogOut } from 'https://esm.sh/lucide-react@0.263.0';
+
+    // 2. 從 CDN 載入 Firebase 模組
+    import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
+    import { getAuth, signInAnonymously, onAuthStateChanged, signInWithPopup, GoogleAuthProvider, signOut } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js';
+    import { getFirestore, collection, doc, setDoc, onSnapshot, updateDoc, arrayUnion, deleteDoc } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
+
+    // ==========================================
+    // 🚀 請在這裡貼上您專屬的 Firebase Config
+    // ==========================================
+    const firebaseConfig = {
+      apiKey: "AIzaSyDlHtyAab-Qz-y_XPh6VZVs-jH9HEZzUCs",
+  authDomain: "pokemon-tournament-bracket.firebaseapp.com",
+  projectId: "pokemon-tournament-bracket",
+  storageBucket: "pokemon-tournament-bracket.firebasestorage.app",
+  messagingSenderId: "394326784061",
+  appId: "1:394326784061:web:8cfb720c2e5f7e4adc1254"
+    };
+
+    const appId = 'pokemon-class-master-official';
+    const app = initializeApp(firebaseConfig);
+    const auth = getAuth(app);
+    const db = getFirestore(app);
+    const googleProvider = new GoogleAuthProvider();
+
+    // --- 自訂精靈球圖示 ---
+    const PokeballIcon = ({ size = 24, className = "" }) => (
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width={size} height={size} className={className}>
+        <circle cx="12" cy="12" r="10" />
+        <path d="M12 2a10 10 0 0 1 10 10H2a10 10 0 0 1 10-10z" fill="currentColor" fillOpacity="0.2" />
+        <path d="M2 12h20" />
+        <circle cx="12" cy="12" r="3" fill="white" />
+      </svg>
+    );
+
+    // --- 主系統 ---
+    function App() {
+      const [user, setUser] = useState(null);
+      const [isCheckingAuth, setIsCheckingAuth] = useState(true);
+
+      const [classes, setClasses] = useState([]);
+      const [students, setStudents] = useState([]);
+      const [tournaments, setTournaments] = useState([]);
+      
+      const [selectedClassId, setSelectedClassId] = useState('');
+      const [inputNames, setInputNames] = useState('');
+      const [newClassName, setNewClassName] = useState('');
+      const [loading, setLoading] = useState(false);
+      const [currentView, setCurrentView] = useState('main'); 
+      
+      const [selectedPlayers, setSelectedPlayers] = useState([]);
+      const [confirmAdvance, setConfirmAdvance] = useState(null); 
+      const [generalConfirm, setGeneralConfirm] = useState(null); 
+
+      const [celebration, setCelebration] = useState(null);
+      const [viewingAllFor, setViewingAllFor] = useState(null);
+      const [pokemonDetail, setPokemonDetail] = useState(null);
+      const [detailLink, setDetailLink] = useState(''); 
+
+      // 登入狀態監聽
+      useEffect(() => {
+        const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+          setUser(currentUser);
+          setIsCheckingAuth(false);
+        });
+        return () => unsubscribe();
+      }, []);
+
+      const handleGoogleLogin = async () => {
+        try {
+          await signInWithPopup(auth, googleProvider);
+        } catch (error) {
+          console.error("登入失敗:", error);
+          alert("登入失敗，請確認 Firebase 設定是否正確。");
+        }
+      };
+
+      const handleLogout = async () => {
+        await signOut(auth);
+      };
+
+      // Real-time Data Sync
+      useEffect(() => {
+        if (!user) return;
+        const unsubClasses = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'classes'), (snapshot) => {
+          const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+          setClasses(data.sort((a, b) => a.createdAt - b.createdAt));
+          if (data.length > 0 && !selectedClassId) setSelectedClassId(data[0].id);
+        }, (err) => console.error(err));
+
+        const unsubStudents = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'students'), (snapshot) => {
+          const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+          setStudents(data);
+        }, (err) => console.error(err));
+
+        const unsubTournaments = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'tournaments'), (snapshot) => {
+          const data = snapshot.docs.map(doc => {
+            const docData = doc.data();
+            return {
+              id: doc.id,
+              ...docData,
+              rounds: typeof docData.rounds === 'string' ? JSON.parse(docData.rounds) : docData.rounds
+            };
+          });
+          setTournaments(data);
+        }, (err) => console.error(err));
+
+        return () => { unsubClasses(); unsubStudents(); unsubTournaments(); };
+      }, [user, selectedClassId]);
+
+      const currentClassStudents = students
+        .filter(s => s.classId === selectedClassId)
+        .sort((a, b) => a.createdAt - b.createdAt);
+      
+      const leaderboardStudents = [...currentClassStudents]
+        .sort((a, b) => (b.collection?.length || 0) - (a.collection?.length || 0));
+
+      const currentTournament = tournaments.find(t => t.id === selectedClassId);
+      const maxScore = Math.max(...leaderboardStudents.map(s => s.collection?.length || 0), 1);
+
+      useEffect(() => {
+         if (currentView === 'tournament_active' && !currentTournament) setCurrentView('tournament_setup');
+      }, [currentTournament, currentView]);
+
+      useEffect(() => {
+         if (pokemonDetail) {
+             setDetailLink('');
+             fetch(`https://pokeapi.co/api/v2/pokemon-species/${pokemonDetail.pkId}`)
+             .then(res => res.json())
+             .then(resData => {
+                 const twNameObj = resData.names.find(n => n.language.name === 'zh-Hant') || resData.names.find(n => n.language.name === 'zh-Hans');
+                 if (twNameObj) {
+                     setDetailLink(`https://wiki.52poke.com/wiki/${twNameObj.name}`);
+                 } else {
+                     const enNameObj = resData.names.find(n => n.language.name === 'en');
+                     const enName = enNameObj ? enNameObj.name : resData.name;
+                     setDetailLink(`https://wiki.52poke.com/wiki/${enName.charAt(0).toUpperCase() + enName.slice(1)}`);
+                 }
+             })
+             .catch(() => setDetailLink(`https://wiki.52poke.com/wiki/${pokemonDetail.name}`));
+         }
+      }, [pokemonDetail]);
+
+      const showConfirm = (title, message, onConfirm, isDanger = true) => setGeneralConfirm({ title, message, onConfirm, isDanger });
+
+      const handleExportCSV = () => {
+        if (currentClassStudents.length === 0) return alert("目前沒有學生資料可以匯出");
+        let csvContent = "\uFEFF順序,姓名,收集數量\n";
+        currentClassStudents.forEach((student, index) => {
+          const count = student.collection?.length || 0;
+          const safeName = student.name.includes(',') ? `"${student.name}"` : student.name;
+          csvContent += `${index + 1},${safeName},${count}\n`;
+        });
+        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(blob);
+        link.setAttribute('download', `${classes.find(c => c.id === selectedClassId)?.name || '班級'}_寶可夢紀錄.csv`);
+        document.body.appendChild(link); link.click(); document.body.removeChild(link);
+      };
+
+      const handleCreateClass = async () => {
+        if (!user || !newClassName.trim()) return;
+        setLoading(true);
+        try {
+          const newClassRef = doc(collection(db, 'artifacts', appId, 'public', 'data', 'classes'));
+          await setDoc(newClassRef, { name: newClassName.trim(), createdAt: Date.now() });
+          setNewClassName(''); setSelectedClassId(newClassRef.id);
+        } catch (e) { console.error(e); } finally { setLoading(false); }
+      };
+
+      const handleDeleteClass = (classId) => {
+        showConfirm("刪除班級", "確定要刪除這個班級及其所有學生嗎？此動作無法復原。", async () => {
+          setLoading(true);
+          try {
+            const studentsToDelete = students.filter(s => s.classId === classId);
+            for (const s of studentsToDelete) await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'students', s.id));
+            await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'tournaments', classId));
+            await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'classes', classId));
+            if (selectedClassId === classId) setSelectedClassId('');
+            setCurrentView('main');
+          } catch (e) { console.error(e); } finally { setLoading(false); }
+        });
+      };
+
+      const handleInitStudents = async () => {
+        if (!user || !inputNames.trim() || !selectedClassId) return;
+        setLoading(true);
+        const names = inputNames.split('\n').filter(n => n.trim() !== "");
+        try {
+          for (const name of names) {
+            await setDoc(doc(collection(db, 'artifacts', appId, 'public', 'data', 'students')), { classId: selectedClassId, name: name.trim(), collection: [], createdAt: Date.now() });
+          }
+          setInputNames('');
+        } catch (e) { console.error(e); } finally { setLoading(false); }
+      };
+
+      const handleDeleteStudent = (studentId) => showConfirm("刪除學生", "確定要從名單中刪除這位學生嗎？", async () => { await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'students', studentId)); });
+
+      const handleCatch = async (studentId, studentName) => {
+        if (!user || loading) return;
+        setLoading(true);
+        try {
+          const pkId = Math.floor(Math.random() * 151) + 1;
+          const response = await fetch(`https://pokeapi.co/api/v2/pokemon/${pkId}`);
+          const data = await response.json();
+          let zhName = data.name.toUpperCase();
+          try {
+            const speciesRes = await fetch(`https://pokeapi.co/api/v2/pokemon-species/${pkId}`);
+            const speciesData = await speciesRes.json();
+            const zhNameObj = speciesData.names.find(n => n.language.name === 'zh-Hant') || speciesData.names.find(n => n.language.name === 'zh-Hans');
+            if (zhNameObj) zhName = zhNameObj.name;
+          } catch (e) {}
+
+          const newPk = { pkId, name: zhName, enName: data.name.toUpperCase(), img: data.sprites.other['official-artwork'].front_default || data.sprites.front_default, timestamp: Date.now(), uniqueId: Math.random().toString(36).substring(2, 15) };
+          await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'students', studentId), { collection: arrayUnion(newPk) });
+          setCelebration({ studentName, pokemon: newPk });
+        } catch (e) { alert("網路異常請重試"); } finally { setLoading(false); }
+      };
+
+      const handleToggleTournamentPlayer = (studentId) => setSelectedPlayers(prev => prev.includes(studentId) ? prev.filter(id => id !== studentId) : [...prev, studentId]);
+      const selectTopPlayers = (count) => setSelectedPlayers(leaderboardStudents.slice(0, count).map(s => s.id));
+
+      const handleGenerateTournament = async () => {
+        if (selectedPlayers.length < 2) return alert("至少需要2名學生！");
+        let size = 2;
+        while(size < selectedPlayers.length) size *= 2;
+        if (size > 16) size = 16; 
+
+        const sortedParticipants = leaderboardStudents.filter(s => selectedPlayers.includes(s.id)).slice(0, size).map((s, idx) => ({ id: s.id, name: s.name, rank: idx + 1, avatar: s.collection?.[s.collection.length - 1]?.img || null }));
+        while(sortedParticipants.length < size) sortedParticipants.push({ id: `bye-${Math.random()}`, name: '--- (輪空)', isBye: true, avatar: null });
+
+        const seeds16 = [0, 15, 7, 8, 3, 12, 4, 11, 1, 14, 6, 9, 2, 13, 5, 10];
+        const seeds8 = [0, 7, 3, 4, 1, 6, 2, 5];
+        const seeds4 = [0, 3, 1, 2];
+        let seeded = size === 16 ? seeds16.map(i => sortedParticipants[i]) : size === 8 ? seeds8.map(i => sortedParticipants[i]) : size === 4 ? seeds4.map(i => sortedParticipants[i]) : sortedParticipants;
+
+        const rounds = [];
+        let matchCount = size / 2;
+        let roundIndex = 0;
+        while (matchCount >= 1) {
+          const roundMatches = [];
+          for (let i = 0; i < matchCount; i++) roundMatches.push(roundIndex === 0 ? { mId: `r${roundIndex}-m${i}`, p1: seeded[i * 2], p2: seeded[i * 2 + 1], winnerId: null } : { mId: `r${roundIndex}-m${i}`, p1: null, p2: null, winnerId: null });
+          rounds.push(roundMatches); matchCount /= 2; roundIndex++;
+        }
+        try {
+          await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'tournaments', selectedClassId), { classId: selectedClassId, size, rounds: JSON.stringify(rounds), createdAt: Date.now() });
+          setCurrentView('tournament_active');
+        } catch (e) { console.error(e); }
+      };
+
+      const handlePlayerNodeClick = (rIdx, mIdx, player, match) => {
+        if (!player || player.isBye || match.winnerId === player.id || (match.winnerId && match.winnerId !== player.id)) return; 
+        setConfirmAdvance({ rIdx, mIdx, player, match });
+      };
+
+      const executeAdvancePlayer = async () => {
+        if (!currentTournament || !confirmAdvance) return;
+        const { rIdx: roundIndex, mIdx: matchIndex, player: winnerPlayer } = confirmAdvance;
+        const newRounds = [...currentTournament.rounds];
+        newRounds[roundIndex][matchIndex].winnerId = winnerPlayer.id;
+
+        if (roundIndex < newRounds.length - 1) {
+          const nextMatchIndex = Math.floor(matchIndex / 2);
+          if (matchIndex % 2 === 0) newRounds[roundIndex + 1][nextMatchIndex].p1 = winnerPlayer;
+          else newRounds[roundIndex + 1][nextMatchIndex].p2 = winnerPlayer;
+          newRounds[roundIndex + 1][nextMatchIndex].winnerId = null;
+          for(let r = roundIndex + 2; r < newRounds.length; r++) {
+             const cascadeMatchIdx = Math.floor(nextMatchIndex / Math.pow(2, r - (roundIndex + 1)));
+             if(newRounds[r][cascadeMatchIdx].p1?.id === winnerPlayer.id) newRounds[r][cascadeMatchIdx].p1 = null;
+             if(newRounds[r][cascadeMatchIdx].p2?.id === winnerPlayer.id) newRounds[r][cascadeMatchIdx].p2 = null;
+             newRounds[r][cascadeMatchIdx].winnerId = null;
+          }
+        }
+        try { await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'tournaments', selectedClassId), { rounds: JSON.stringify(newRounds) }); } catch (e) {}
+        setConfirmAdvance(null);
+      };
+
+      const handleDeleteTournament = () => {
+        showConfirm("結束賽季", "確定要結束目前的賽季，重新選擇名單嗎？", async () => {
+          setCurrentView('tournament_setup'); setSelectedPlayers([]);
+          try { await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'tournaments', selectedClassId)); } catch (e) {}
+        }, false);
+      };
+
+      const handleNewSeason = async () => {
+        setCurrentView('tournament_setup'); setSelectedPlayers([]);
+        try { await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'tournaments', selectedClassId)); } catch (e) {}
+      };
+
+      const goToTournament = () => {
+        if (currentTournament) setCurrentView('tournament_active');
+        else { setSelectedPlayers(leaderboardStudents.slice(0, 8).map(s=>s.id)); setCurrentView('tournament_setup'); }
+      };
+
+      // --- UI Components ---
+      if (isCheckingAuth) return <div className="min-h-screen flex items-center justify-center bg-slate-50"><div className="w-12 h-12 border-4 border-blue-600 border-t-transparent rounded-full animate-spin"></div></div>;
+
+      if (!user) {
+        return (
+          <div className="min-h-screen bg-gradient-to-br from-blue-700 to-indigo-900 flex items-center justify-center p-4">
+            <div className="bg-white rounded-3xl shadow-2xl p-8 md:p-12 max-w-md w-full text-center">
+              <div className="bg-yellow-400 w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-6 shadow-inner"><Zap className="text-yellow-600 fill-yellow-600 w-10 h-10" /></div>
+              <h1 className="text-3xl font-black text-slate-800 mb-2">寶可夢對戰系統</h1>
+              <p className="text-slate-500 font-bold mb-8">管理專屬入口</p>
+              <button onClick={handleGoogleLogin} className="w-full bg-white border-2 border-slate-200 hover:bg-slate-50 text-slate-700 font-black py-4 px-6 rounded-2xl flex items-center justify-center gap-3 transition-all shadow-sm">
+                <svg className="w-6 h-6" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/><path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/><path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/><path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/></svg>
+                使用 Google 登入
+              </button>
+            </div>
+          </div>
+        );
+      }
+
+      const renderPokemonGrid = (collectionList, maxDisplay = 10, student) => {
+        const list = collectionList || [];
+        const displayList = list.slice(0, maxDisplay);
+        const hasMore = list.length > maxDisplay;
+        return (
+          <div className="flex flex-wrap gap-2 min-h-[48px] p-2 bg-slate-50 rounded-2xl border border-dashed border-slate-200 mt-3">
+            {displayList.length > 0 ? displayList.map((pk) => <img key={pk.uniqueId} src={pk.img} alt={pk.name} onClick={() => setPokemonDetail(pk)} className="w-10 h-10 object-contain hover:scale-125 transition-transform cursor-pointer drop-shadow-sm" title={pk.name} />) : <span className="text-xs text-slate-300 m-auto italic">尚未收集</span>}
+            {hasMore && <button onClick={() => setViewingAllFor(student)} className="w-10 h-10 flex items-center justify-center text-xs font-bold text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-full border border-blue-200 cursor-pointer shadow-sm">+{list.length - maxDisplay}</button>}
+          </div>
+        );
+      };
+
+      const renderPlayerNode = (player, match, isLeft, rIdx, mIdx) => {
+        const isWinner = match.winnerId === player?.id;
+        const isLoser = match.winnerId && match.winnerId !== player?.id;
+        const isEmpty = !player;
+        const isBye = player?.isBye;
+        return (
+          <div onClick={() => handlePlayerNodeClick(rIdx, mIdx, player, match)} className={`flex items-center p-0 rounded-full transition-all w-28 md:w-32 lg:w-40 h-10 md:h-12 lg:h-14 relative shrink-0 ${isEmpty || isBye ? 'opacity-50' : isWinner ? 'scale-105 z-20' : isLoser ? 'opacity-40 grayscale scale-95' : 'hover:scale-105 cursor-pointer'} ${!isLeft ? 'flex-row-reverse' : ''}`}>
+            <div className={`absolute inset-0 rounded-full border-[2px] md:border-[3px] pointer-events-none ${isEmpty || isBye ? 'border-dashed border-slate-300' : isWinner ? 'border-amber-400 shadow-[0_0_6px_rgba(250,204,21,1)] bg-gradient-to-r from-yellow-50 to-white' : isLoser ? 'border-slate-200 bg-slate-50' : 'border-slate-300 bg-white hover:border-blue-400'}`}></div>
+            <div className={`h-full aspect-square rounded-full flex items-center justify-center shrink-0 bg-white relative z-10 border-[2px] md:border-[3px] ${isWinner ? 'border-amber-400' : isLoser ? 'border-slate-200' : 'border-slate-300'}`}>
+              {player?.avatar && !isBye ? <img src={player.avatar} alt="avatar" className="w-[85%] h-[85%] object-contain drop-shadow-sm" /> : <UserPlus className="text-slate-300 w-4 h-4 md:w-5 md:h-5" />}
+            </div>
+            <div className={`flex-1 truncate px-1.5 md:px-2 text-[10px] md:text-sm lg:text-base font-black relative z-10 ${isWinner ? 'text-amber-900' : 'text-slate-700'} ${!isLeft ? 'text-right' : 'text-left'}`}>
+              {player?.name || (isBye ? '輪空' : '等待晉級')}
+            </div>
+            {player?.rank && !isWinner && !isLoser && <div className={`absolute top-1/2 -translate-y-1/2 w-4 h-4 md:w-5 md:h-5 rounded-full flex items-center justify-center shadow-sm font-bold bg-slate-800 text-white text-[9px] md:text-[11px] z-30 ${isLeft ? '-right-2 md:-right-2.5' : '-left-2 md:-left-2.5'}`}>{player.rank}</div>}
+          </div>
+        );
+      };
+
+      const renderMatchBox = (match, rIdx, mIdx, isLeft) => {
+        const p1Won = match.winnerId === match.p1?.id;
+        const p2Won = match.winnerId === match.p2?.id;
+        const l1 = p1Won ? "border-amber-400 drop-shadow-[0_0_5px_rgba(250,204,21,1)] z-0" : "border-slate-300 opacity-40 z-[-1]";
+        const l2 = p2Won ? "border-amber-400 drop-shadow-[0_0_5px_rgba(250,204,21,1)] z-0" : "border-slate-300 opacity-40 z-[-1]";
+        const l3 = p1Won || p2Won ? "border-amber-400 drop-shadow-[0_0_5px_rgba(250,204,21,1)] z-0" : "border-slate-300 opacity-40 z-[-1]";
+        const outR = "right-[-0.5rem] md:right-[-0.75rem] lg:right-[-1rem]";
+        const w = "w-[0.5rem] md:w-[0.75rem] lg:w-[1rem]";
+        const outL = "left-[-0.5rem] md:left-[-0.75rem] lg:left-[-1rem]";
+        return (
+          <div key={match.mId} className="relative flex flex-col w-full h-full justify-between z-10 my-2">
+             {isLeft ? (
+               <React.Fragment>
+                 <div className={`absolute top-[25%] bottom-[50%] ${outR} ${w} border-t-[2px] md:border-t-[3px] border-r-[2px] md:border-r-[3px] rounded-tr-lg transition-all ${l1}`}></div>
+                 <div className={`absolute top-[50%] bottom-[25%] ${outR} ${w} border-b-[2px] md:border-b-[3px] border-r-[2px] md:border-r-[3px] rounded-br-lg transition-all ${l2}`}></div>
+                 <div className={`absolute top-[50%] right-[-1rem] md:right-[-1.5rem] lg:right-[-2rem] ${w} border-t-[2px] md:border-t-[3px] transition-all ${l3}`}></div>
+               </React.Fragment>
+             ) : (
+               <React.Fragment>
+                 <div className={`absolute top-[25%] bottom-[50%] ${outL} ${w} border-t-[2px] md:border-t-[3px] border-l-[2px] md:border-l-[3px] rounded-tl-lg transition-all ${l1}`}></div>
+                 <div className={`absolute top-[50%] bottom-[25%] ${outL} ${w} border-b-[2px] md:border-b-[3px] border-l-[2px] md:border-l-[3px] rounded-bl-lg transition-all ${l2}`}></div>
+                 <div className={`absolute top-[50%] left-[-1rem] md:left-[-1.5rem] lg:left-[-2rem] ${w} border-t-[2px] md:border-t-[3px] transition-all ${l3}`}></div>
+               </React.Fragment>
+             )}
+             <div className="flex-1 flex items-center justify-center py-2 md:py-3 lg:py-4 w-full">{renderPlayerNode(match.p1, match, isLeft, rIdx, mIdx)}</div>
+             <div className="flex-1 flex items-center justify-center py-2 md:py-3 lg:py-4 w-full">{renderPlayerNode(match.p2, match, isLeft, rIdx, mIdx)}</div>
+          </div>
+        );
+      };
+
+      const renderMainClass = () => (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 max-w-7xl mx-auto">
+          <div className="lg:col-span-2 space-y-6">
+            <div className="bg-white p-4 rounded-2xl shadow-sm border flex flex-wrap gap-4 justify-between items-center">
+              <div className="flex items-center gap-3">
+                <h2 className="text-xl font-black">{classes.find(c => c.id === selectedClassId)?.name}</h2>
+                <button onClick={() => handleDeleteClass(selectedClassId)} className="text-red-400 hover:bg-red-50 p-1.5 rounded-full"><Trash2 size={16} /></button>
+              </div>
+              <div className="flex gap-2">
+                <button onClick={handleExportCSV} className="bg-emerald-500 hover:bg-emerald-600 text-white px-3 py-1.5 rounded-lg text-sm font-bold flex items-center gap-1 transition-colors shadow-sm">
+                  <Download size={16} /> <span className="hidden sm:inline">匯出紀錄</span>
+                </button>
+                <input type="text" placeholder="新增班級..." className="p-2 text-sm border rounded-lg w-24 md:w-32 outline-none focus:border-blue-400" value={newClassName} onChange={e => setNewClassName(e.target.value)} />
+                <button onClick={handleCreateClass} className="bg-slate-800 text-white px-3 py-1.5 rounded-lg text-sm font-bold">+ 新班</button>
+              </div>
+            </div>
+
+            {currentClassStudents.length === 0 ? (
+               <div className="bg-white p-8 rounded-2xl shadow-sm border text-center">
+                  <h3 className="text-lg font-bold mb-3">匯入學生名單</h3>
+                  <textarea className="w-full h-32 p-3 border rounded-xl mb-3 outline-none" placeholder="每行輸入一位姓名..." value={inputNames} onChange={(e) => setInputNames(e.target.value)} />
+                  <button onClick={handleInitStudents} className="bg-blue-600 text-white font-bold py-2 px-8 rounded-xl shadow-md">建立名單</button>
+               </div>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                {currentClassStudents.map((student) => (
+                  <div key={student.id} className="bg-white p-4 rounded-2xl shadow-sm border hover:shadow-md relative group">
+                    <button onClick={() => handleDeleteStudent(student.id)} className="absolute top-2 right-2 text-slate-300 hover:text-red-500 opacity-0 group-hover:opacity-100"><X size={16} /></button>
+                    <div className="flex justify-between items-center pr-6">
+                      <h3 className="text-lg font-bold flex items-center gap-2">
+                        {student.name}
+                        <span className="bg-blue-100 text-blue-800 text-xs px-2 py-0.5 rounded-full">{student.collection?.length || 0}</span>
+                      </h3>
+                      <button onClick={() => handleCatch(student.id, student.name)} className="bg-red-500 text-white p-2 rounded-full hover:bg-red-600 hover:scale-110 transition-transform active:scale-90 shadow-md">
+                        <PokeballIcon size={20} />
+                      </button>
+                    </div>
+                    {renderPokemonGrid(student.collection, 10, student)}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+          <div className="space-y-6">
+            <div className="bg-white rounded-3xl shadow-lg border overflow-hidden sticky top-24">
+              <div className="bg-yellow-400 p-4 flex items-center gap-2">
+                <Trophy className="text-yellow-900" size={24} />
+                <h2 className="text-lg font-black text-yellow-900">收集排行榜</h2>
+              </div>
+              <div className="p-2">
+                {leaderboardStudents.map((s, i) => (
+                  <div key={s.id} className="flex items-center p-3 border-b border-slate-50 last:border-0 hover:bg-slate-50 rounded-xl transition-colors gap-2 md:gap-3">
+                    <div className="w-6 md:w-8 text-center font-bold shrink-0">{i<3 ? ['🥇','🥈','🥉'][i] : <span className="text-slate-400">{i+1}</span>}</div>
+                    <div className="w-16 md:w-20 font-bold truncate shrink-0 text-sm md:text-base">{s.name}</div>
+                    <div className="flex-1 h-2 md:h-3 bg-slate-100 rounded-full overflow-hidden flex items-center">
+                        <div className="h-full bg-amber-400 rounded-full transition-all duration-500 ease-out" style={{ width: `${((s.collection?.length || 0) / maxScore) * 100}%`, minWidth: s.collection?.length > 0 ? '4px' : '0' }}></div>
+                    </div>
+                    <div className="font-black text-blue-600 bg-blue-50 px-2 py-0.5 md:px-3 md:py-1 rounded-full text-xs md:text-sm shrink-0">{s.collection?.length || 0}</div>
+                  </div>
+                ))}
+                {leaderboardStudents.length === 0 && <div className="p-6 text-center text-slate-400 text-sm">暫無名單</div>}
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+
+      const renderTournamentSetup = () => (
+        <div className="bg-white rounded-3xl shadow-xl border p-6 md:p-10 max-w-4xl mx-auto">
+           <div className="text-center mb-8">
+             <Trophy size={48} className="mx-auto text-yellow-500 mb-4" />
+             <h2 className="text-3xl font-black text-slate-800">建立大師賽名單</h2>
+             <p className="text-slate-500 mt-2">勾選人數即使超過 8 人或非偶數都沒問題！</p>
+           </div>
+           <div className="flex flex-wrap justify-center gap-3 mb-6">
+              <button onClick={() => selectTopPlayers(4)} className="bg-blue-50 text-blue-700 px-4 py-2 rounded-full font-bold text-sm">選前 4 名</button>
+              <button onClick={() => selectTopPlayers(8)} className="bg-blue-50 text-blue-700 px-4 py-2 rounded-full font-bold text-sm">選前 8 名</button>
+              <button onClick={() => selectTopPlayers(16)} className="bg-blue-50 text-blue-700 px-4 py-2 rounded-full font-bold text-sm">選前 16 名</button>
+              <button onClick={() => setSelectedPlayers([])} className="bg-slate-50 text-slate-600 px-4 py-2 rounded-full font-bold text-sm">清除</button>
+           </div>
+           <div className="bg-slate-50 border rounded-2xl p-4 max-h-[400px] overflow-y-auto mb-8 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+             {leaderboardStudents.map((s, idx) => (
+               <div key={s.id} onClick={() => handleToggleTournamentPlayer(s.id)} className={`flex items-center gap-3 p-3 rounded-xl cursor-pointer border-2 transition-all ${selectedPlayers.includes(s.id) ? 'bg-blue-50 border-blue-400 shadow-sm' : 'bg-white border-transparent hover:border-slate-200'}`}>
+                 {selectedPlayers.includes(s.id) ? <CheckCircle2 className="text-blue-500" size={20}/> : <Circle className="text-slate-300" size={20}/>}
+                 <span className="w-6 text-center text-xs font-bold text-slate-400">#{idx+1}</span>
+                 <div className="w-8 h-8 rounded-full bg-white border flex items-center justify-center overflow-hidden shrink-0">
+                   {s.collection?.length > 0 ? <img src={s.collection[s.collection.length-1].img} className="w-6 h-6 object-contain" alt=""/> : <UserPlus size={14} className="text-slate-300"/>}
+                 </div>
+                 <span className="font-bold flex-1 truncate">{s.name}</span>
+               </div>
+             ))}
+           </div>
+           <div className="flex flex-col items-center">
+             <div className="text-lg font-bold mb-4">已選擇: <span className="text-blue-600 text-2xl">{selectedPlayers.length}</span> 人</div>
+             <button onClick={handleGenerateTournament} className="bg-red-500 hover:bg-red-600 text-white font-black text-lg py-4 px-12 rounded-2xl shadow-xl flex items-center gap-3">
+               <Swords size={24} /> 產生大螢幕賽程圖
+             </button>
+           </div>
+        </div>
+      );
+
+      const renderTournamentActive = () => {
+        if (!currentTournament) return <div className="text-center py-20 font-bold text-slate-500"><Trophy size={48} className="mx-auto animate-bounce mb-4"/>準備中...</div>;
+        const rIdx = currentTournament.rounds.length - 1;
+        const finalMatch = currentTournament.rounds[rIdx][0];
+        const p1Won = finalMatch.winnerId === finalMatch.p1?.id;
+        const l1 = p1Won ? "border-amber-400 drop-shadow-[0_0_5px_rgba(250,204,21,1)] z-0" : "border-slate-300 opacity-40 z-[-1]";
+        const p2Won = finalMatch.winnerId === finalMatch.p2?.id;
+        const l2 = p2Won ? "border-amber-400 drop-shadow-[0_0_5px_rgba(250,204,21,1)] z-0" : "border-slate-300 opacity-40 z-[-1]";
+        const champ = finalMatch?.winnerId === finalMatch?.p1?.id ? finalMatch.p1 : finalMatch?.winnerId === finalMatch?.p2?.id ? finalMatch.p2 : null;
+
+        return (
+          <div className="bg-[#f8f9fa] rounded-[2rem] shadow-2xl border border-slate-200 p-2 md:p-6 lg:p-10 min-h-[700px] relative w-full flex flex-col overflow-hidden">
+             <div className="absolute inset-0 opacity-[0.03] pointer-events-none flex items-center justify-center overflow-hidden rounded-[2rem]"><Trophy size={600} /></div>
+             <div className="relative z-10 flex flex-col sm:flex-row justify-between items-center mb-6 lg:mb-8 border-b-2 border-slate-200 pb-4">
+                <div>
+                  <h2 className="text-2xl md:text-4xl font-black text-slate-800 flex items-center gap-3"><Award className="text-red-500" size={36} /> 決戰大師賽</h2>
+                </div>
+                <button onClick={handleDeleteTournament} className="mt-4 sm:mt-0 bg-white border-2 border-slate-200 hover:bg-slate-100 text-slate-700 px-6 py-3 rounded-2xl font-black text-sm md:text-base transition-colors shadow-sm">
+                   結束賽季 / 重新挑選
+                </button>
+             </div>
+
+             <div className="w-full overflow-x-auto flex-1 flex items-center scrollbar-thin scrollbar-thumb-slate-300 pb-8">
+               <div className="m-auto flex items-stretch min-w-max px-2 lg:px-4 py-4 font-sans gap-2 md:gap-4 lg:gap-6">
+                 {currentTournament.rounds.slice(0, currentTournament.rounds.length - 1).map((round, roundIndex) => (
+                   <div key={`L-R${roundIndex}`} className="flex flex-col justify-around relative min-h-full flex-1 px-1">
+                     {round.slice(0, round.length / 2).map((match, idx) => renderMatchBox(match, roundIndex, idx, true))}
+                   </div>
+                 ))}
+                 <div className="flex flex-col justify-center relative min-h-full px-1">
+                    <div className="relative flex items-center justify-center w-full py-4 z-10">
+                       <div className={`absolute top-[50%] right-[-1rem] md:right-[-1.5rem] lg:right-[-2rem] w-[1rem] md:w-[1.5rem] lg:w-[2rem] border-t-[2px] md:border-t-[3px] transition-all duration-300 ${l1}`}></div>
+                       {renderPlayerNode(finalMatch.p1, finalMatch, true, rIdx, 0)}
+                    </div>
+                 </div>
+                 <div className="flex flex-col items-center justify-center relative z-20 shrink-0 mx-2 md:mx-4">
+                    <h4 className="font-black text-amber-500 tracking-widest mb-4 drop-shadow-sm text-lg md:text-xl lg:text-2xl">WORLD SERIES</h4>
+                    <div className="w-36 sm:w-48 md:w-56 lg:w-64 p-4 md:p-6 lg:p-8 bg-gradient-to-b from-[#fffcf0] to-[#fff3c4] rounded-[1.5rem] lg:rounded-[2rem] shadow-2xl border-[4px] md:border-[6px] border-amber-400 text-center relative mb-4">
+                       <Trophy className="mx-auto text-amber-600 mb-4 drop-shadow-sm w-10 h-10 md:w-16 md:h-16 lg:w-20 lg:h-20" />
+                       {champ ? (
+                          <div className="animate-in zoom-in duration-500">
+                            <img src={champ.avatar} className="w-16 h-16 md:w-28 md:h-28 lg:w-40 lg:h-40 mx-auto object-contain drop-shadow-2xl animate-bounce" alt="champ" />
+                            <h3 className="text-xl md:text-2xl lg:text-3xl font-black text-amber-900 mt-4 truncate">{champ.name}</h3>
+                            <p className="text-amber-700 font-bold text-xs md:text-sm lg:text-base uppercase tracking-widest bg-amber-200 inline-block px-3 md:px-5 py-1 md:py-1.5 rounded-full mt-3 shadow-sm">Champion</p>
+                            <button onClick={handleNewSeason} className="mt-6 w-full bg-blue-600 hover:bg-blue-700 text-white font-black py-2.5 md:py-4 rounded-xl md:rounded-2xl text-sm md:text-lg shadow-xl hover:scale-105 transition-all animate-pulse">🏆 開啟新賽局</button>
+                          </div>
+                       ) : <div className="text-amber-600/50 font-black py-10 lg:py-14 text-sm md:text-xl">冠軍虛位以待</div>}
+                    </div>
+                 </div>
+                 <div className="flex flex-col justify-center relative min-h-full px-1">
+                    <div className="relative flex items-center justify-center w-full py-4 z-10">
+                       <div className={`absolute top-[50%] left-[-1rem] md:left-[-1.5rem] lg:left-[-2rem] w-[1rem] md:w-[1.5rem] lg:w-[2rem] border-t-[2px] md:border-t-[3px] transition-all duration-300 ${l2}`}></div>
+                       {renderPlayerNode(finalMatch.p2, finalMatch, false, rIdx, 0)}
+                    </div>
+                 </div>
+                 {currentTournament.rounds.slice(0, currentTournament.rounds.length - 1).reverse().map((round, revIdx) => (
+                     <div key={`R-R${currentTournament.rounds.length - 2 - revIdx}`} className="flex flex-col justify-around relative min-h-full flex-1 px-1 flex-row-reverse">
+                       {round.slice(round.length / 2).map((match, relativeIdx) => renderMatchBox(match, currentTournament.rounds.length - 2 - revIdx, round.length / 2 + relativeIdx, false))}
+                     </div>
+                 ))}
+               </div>
+             </div>
+          </div>
+        );
+      };
+
+      return (
+        <div className="min-h-screen bg-slate-50 font-sans text-slate-900 pb-20 overflow-x-hidden">
+          <header className="bg-gradient-to-r from-blue-800 to-indigo-700 text-white p-4 shadow-lg sticky top-0 z-30">
+            <div className="max-w-7xl mx-auto flex flex-col md:flex-row justify-between items-center gap-4">
+              <div className="flex items-center gap-3">
+                <div className="bg-white/20 p-2 rounded-full"><Zap className="text-yellow-400 fill-yellow-400" size={24} /></div>
+                <h1 className="text-xl md:text-2xl font-black tracking-wider">寶可夢對戰系統</h1>
+              </div>
+              
+              <div className="flex flex-wrap items-center gap-3 w-full md:w-auto">
+                {selectedClassId && (
+                  <div className="flex bg-black/20 p-1 rounded-xl w-full md:w-auto">
+                    <button onClick={() => setCurrentView('main')} className={`flex-1 md:flex-none flex items-center justify-center gap-2 px-4 py-2 rounded-lg text-sm font-bold transition-all ${currentView === 'main' ? 'bg-white text-blue-800 shadow-md' : 'text-blue-100 hover:bg-white/10'}`}>
+                      <LayoutGrid size={16} /> 日常收集
+                    </button>
+                    <button onClick={goToTournament} className={`flex-1 md:flex-none flex items-center justify-center gap-2 px-4 py-2 rounded-lg text-sm font-bold transition-all ${currentView.includes('tournament') ? 'bg-red-500 text-white shadow-md' : 'text-blue-100 hover:bg-white/10'}`}>
+                      <Trophy size={16} /> 大師賽
+                    </button>
+                  </div>
+                )}
+                
+                <select className="bg-white text-slate-800 px-3 py-2 rounded-xl font-bold shadow-sm outline-none w-full md:w-auto" value={selectedClassId} onChange={(e) => { setSelectedClassId(e.target.value); setCurrentView('main'); }}>
+                  <option value="" disabled>選擇班級...</option>
+                  {classes.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                </select>
+                <button onClick={handleLogout} className="bg-red-500 hover:bg-red-600 px-3 py-2 rounded-xl text-sm font-bold flex items-center gap-1"><LogOut size={16}/> 登出</button>
+              </div>
+            </div>
+          </header>
+
+          <main className="max-w-[1920px] mx-auto px-2 md:px-4 mt-6">
+            {classes.length === 0 && (
+              <div className="bg-white p-8 rounded-3xl shadow-lg max-w-md mx-auto text-center border mt-10">
+                <Users size={48} className="mx-auto text-blue-300 mb-4" />
+                <h2 className="text-2xl font-bold mb-2">歡迎來到大師系統</h2>
+                <p className="text-slate-500 mb-6">請先建立您的第一個班級</p>
+                <div className="flex gap-2">
+                  <input type="text" placeholder="班級名稱" className="flex-1 p-3 border-2 rounded-xl outline-none focus:border-blue-500" value={newClassName} onChange={e => setNewClassName(e.target.value)} />
+                  <button onClick={handleCreateClass} className="bg-blue-600 text-white px-5 rounded-xl font-bold hover:bg-blue-700">建立</button>
+                </div>
+              </div>
+            )}
+            {classes.length > 0 && selectedClassId && currentView === 'main' && renderMainClass()}
+            {currentView === 'tournament_setup' && renderTournamentSetup()}
+            {currentView === 'tournament_active' && renderTournamentActive()}
+          </main>
+
+          {generalConfirm && (
+            <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+              <div className="bg-white rounded-3xl p-6 md:p-8 max-w-sm w-full text-center shadow-2xl relative">
+                 <div className={`mx-auto w-16 h-16 ${generalConfirm.isDanger ? 'bg-red-100 text-red-600' : 'bg-blue-100 text-blue-600'} rounded-full flex items-center justify-center mb-4`}>
+                    {generalConfirm.isDanger ? <Trash2 size={32} /> : <Users size={32} />}
+                 </div>
+                 <h3 className="text-2xl font-black text-slate-800 mb-2">{generalConfirm.title}</h3>
+                 <p className="text-slate-600 font-bold mb-6 text-sm md:text-base">{generalConfirm.message}</p>
+                 <div className="flex gap-3">
+                    <button onClick={() => setGeneralConfirm(null)} className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-3 rounded-xl transition-colors">取消</button>
+                    <button onClick={() => { generalConfirm.onConfirm(); setGeneralConfirm(null); }} className={`flex-1 text-white font-bold py-3 rounded-xl shadow-lg transition-colors ${generalConfirm.isDanger ? 'bg-red-600 hover:bg-red-700 shadow-red-200' : 'bg-blue-600 hover:bg-blue-700 shadow-blue-200'}`}>確定</button>
+                 </div>
+              </div>
+            </div>
+          )}
+
+          {confirmAdvance && (
+            <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+              <div className="bg-white rounded-[2rem] p-6 md:p-10 max-w-sm w-full text-center shadow-2xl relative">
+                 <div className="mx-auto w-20 h-20 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center mb-6"><Swords size={40} /></div>
+                 <h3 className="text-3xl font-black text-slate-800 mb-4">確認晉級</h3>
+                 <p className="text-slate-600 font-bold mb-8 text-lg">確定要讓 <span className="text-blue-600 font-black text-2xl mx-1">{confirmAdvance.player.name}</span> 贏得對戰並晉級下一輪嗎？</p>
+                 <div className="flex gap-4">
+                    <button onClick={() => setConfirmAdvance(null)} className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-4 rounded-xl transition-colors text-lg">按錯了，取消</button>
+                    <button onClick={executeAdvancePlayer} className="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-bold py-4 rounded-xl shadow-lg shadow-blue-200 transition-colors text-lg">確定晉級！</button>
+                 </div>
+              </div>
+            </div>
+          )}
+
+          {celebration && (
+            <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/80 backdrop-blur-sm p-4">
+              <div className="bg-white rounded-[40px] p-8 max-w-sm w-full text-center shadow-2xl relative">
+                <button onClick={() => setCelebration(null)} className="absolute top-6 right-6 text-slate-400 hover:text-slate-800"><X size={24} /></button>
+                <div className="inline-block p-4 bg-red-100 rounded-full mb-4 animate-bounce"><PokeballIcon size={48} className="text-red-500" /></div>
+                <h2 className="text-2xl font-black text-slate-800 mb-1">{celebration.studentName}</h2>
+                <p className="text-slate-500 mb-6 font-medium">成功捕獲了寶可夢！</p>
+                <img src={celebration.pokemon.img} alt={celebration.pokemon.name} className="w-48 h-48 mx-auto relative z-10 drop-shadow-2xl animate-pulse cursor-pointer hover:scale-110 transition-transform" onClick={() => { setPokemonDetail(celebration.pokemon); setCelebration(null); }}/>
+                <h3 className="text-3xl font-black text-blue-600 my-4 uppercase tracking-widest">{celebration.pokemon.name}</h3>
+                <button onClick={() => setCelebration(null)} className="w-full bg-slate-900 text-white font-bold py-4 rounded-2xl hover:bg-slate-800 transition-colors">收進背包</button>
+              </div>
+            </div>
+          )}
+
+          {viewingAllFor && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/80 backdrop-blur-sm p-4">
+              <div className="bg-white rounded-3xl p-6 max-w-3xl w-full shadow-2xl max-h-[80vh] flex flex-col">
+                <div className="flex justify-between items-center mb-6 border-b pb-4">
+                  <div>
+                    <h2 className="text-2xl font-black text-slate-800 flex items-center gap-2"><Award className="text-blue-500" /> {viewingAllFor.name} 的圖鑑</h2>
+                    <p className="text-slate-500 text-sm mt-1">共收集了 {viewingAllFor.collection?.length || 0} 隻</p>
+                  </div>
+                  <button onClick={() => setViewingAllFor(null)} className="p-2 bg-slate-100 hover:bg-slate-200 rounded-full transition-colors"><X size={24} /></button>
+                </div>
+                <div className="overflow-y-auto flex-1 p-2">
+                  <div className="grid grid-cols-4 sm:grid-cols-6 md:grid-cols-8 gap-4">
+                    {viewingAllFor.collection?.map((pk) => (
+                      <div key={pk.uniqueId} onClick={() => setPokemonDetail(pk)} className="flex flex-col items-center gap-2 p-2 bg-slate-50 rounded-xl hover:bg-blue-50 hover:scale-105 transition-all cursor-pointer border border-transparent hover:border-blue-200">
+                        <img src={pk.img} alt={pk.name} className="w-16 h-16 object-contain drop-shadow-md" />
+                        <span className="text-[10px] font-bold text-slate-600 truncate w-full text-center">{pk.name}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {pokemonDetail && (
+            <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/90 backdrop-blur-md p-4">
+              <div className="bg-gradient-to-b from-slate-800 to-slate-900 rounded-[40px] p-8 max-w-sm w-full text-center shadow-2xl relative border border-slate-700">
+                <button onClick={() => setPokemonDetail(null)} className="absolute top-6 right-6 text-slate-400 hover:text-white bg-slate-800 p-2 rounded-full"><X size={20} /></button>
+                <div className="relative mb-6 mt-4">
+                  <div className="absolute inset-0 bg-blue-500 blur-3xl opacity-20 rounded-full"></div>
+                  <img src={pokemonDetail.img} alt={pokemonDetail.name} className="w-56 h-56 mx-auto relative z-10 drop-shadow-[0_0_20px_rgba(255,255,255,0.2)] hover:scale-110 transition-transform duration-300"/>
+                </div>
+                <div className="bg-slate-800/50 rounded-2xl p-4 mb-6 backdrop-blur-sm border border-slate-700">
+                  <p className="text-slate-400 text-xs font-bold tracking-widest mb-1">NO. {pokemonDetail.pkId.toString().padStart(3, '0')}</p>
+                  <h3 className="text-3xl font-black text-white uppercase tracking-widest">{pokemonDetail.name}</h3>
+                </div>
+                <a href={detailLink || '#'} target="_blank" rel="noopener noreferrer" className="w-full flex items-center justify-center gap-2 bg-blue-600 text-white font-bold py-4 rounded-2xl hover:bg-blue-500 transition-colors shadow-[0_0_20px_rgba(37,99,235,0.4)]">
+                  <ExternalLink size={20} /> 查看完整圖鑑資訊
+                </a>
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    const root = createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+</body>
+</html>
